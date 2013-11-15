@@ -11,7 +11,6 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.core.management.base import LabelCommand, BaseCommand
 from optparse import make_option
 from django.db import models
-from django.contrib.contenttypes.models import ContentType
 
 from django.conf import settings
 CSVIMPORT_LOG = getattr(settings, 'CSVIMPORT_LOG', 'screen')
@@ -28,6 +27,10 @@ BOOLEAN_TRUE = [1, '1', 'Y', 'Yes', 'yes', 'True', 'true', 'T', 't']
 # Note if mappings are manually specified they are of the following form ...
 # MAPPINGS = "column1=shared_code,column2=org(Organisation|name),column3=description"
 # statements = re.compile(r";[ \t]*$", re.M)
+
+class WrongFileExtensionException(Exception):
+    pass
+
 
 def save_csvimport(props=None, instance=None):
     """ To avoid circular imports do saves here """
@@ -127,7 +130,11 @@ class Command(LabelCommand):
         self.file_name = csvfile
         self.deduplicate = deduplicate
         if uploaded:
-            self.csvfile = self.__csvfile(uploaded.path)
+            # TODO: generalize
+            if uploaded.name.endswith('.csv') or uploaded.name.endswith('.txt'):
+                self.csvfile = self.__csvfile(uploaded.path)
+            else:
+                raise WrongFileExtensionException
         else:
             self.check_filesystem(csvfile)
 
@@ -158,7 +165,7 @@ class Command(LabelCommand):
         if not getattr(self, 'csvfile', []):
             raise Exception('File %s not found' % csvfile)
 
-    def run(self, logid=0):
+    def run(self, logid=0, meta={}):
         """ Run the csvimport """
         loglist = []
         if self.nameindexes:
@@ -277,6 +284,9 @@ class Command(LabelCommand):
                     matchdict[field + '__exact'] = getattr(model_instance,
                                                            field, None)
                 try:
+                    # TODO: generalize
+                    if meta.get('client'):
+                        matchdict.update({'organisation': meta.get('client')})
                     self.model.objects.get(**matchdict)
                     continue
                 except ObjectDoesNotExist:
@@ -284,11 +294,14 @@ class Command(LabelCommand):
                 except OverflowError:
                     pass
             try:
-
-                importing_csv.send(sender=model_instance,
-                                    row=dict(zip(self.csvfile[:1][0], row)))
+                # TODO: generalize
+                importing_csv.send(sender=model_instance.__class__,
+                                  instance=model_instance,
+                                  client=meta.get('client'),
+                                  filename=meta.get('filename'),
+                                  row=dict(zip(self.csvfile[:1][0], row)))
                 model_instance.save()
-                imported_csv.send(sender=model_instance,
+                imported_csv.send(sender=model_instance.__class__,
                                   row=dict(zip(self.csvfile[:1][0], row)))
 
             except DatabaseError, err:
@@ -326,11 +339,7 @@ class Command(LabelCommand):
         """
         fk_key, fk_field = foreignkey
         if fk_key and fk_field:
-            try:
-                new_app_label = ContentType.objects.get(model= fk_key).app_label
-            except:
-                new_app_label = self.app_label
-            fk_model = models.get_model(new_app_label, fk_key)            
+            fk_model = models.get_model(self.app_label, fk_key)
             matches = fk_model.objects.filter(**{fk_field+'__exact':
                                                  rowcol})
 
