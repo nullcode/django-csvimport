@@ -287,9 +287,13 @@ class Command(LabelCommand):
                     # TODO: generalize
                     if meta.get('client'):
                         matchdict.update({'organisation': meta.get('client')})
+                    else:
+                        matchdict.update({'organisation__isnull': True})
                     self.model.objects.get(**matchdict)
                     continue
                 except ObjectDoesNotExist:
+                    pass
+                except MultipleObjectsReturned:
                     pass
                 except OverflowError:
                     pass
